@@ -36,11 +36,11 @@ import {
 	BINDING_NAME as D1_TAG_BINDING_NAME,
 	NAME as D1_TAG_NAME,
 } from "../../api/overrides/tag-cache/d1-next-tag-cache.js";
-import { normalizePath } from "../build/utils/normalize-path.js";
-import type { WranglerTarget } from "../utils/run-wrangler.js";
-import { runWrangler } from "../utils/run-wrangler.js";
-import { getEnvFromPlatformProxy, quoteShellMeta, type WorkerEnvVar } from "./helpers.js";
-import type { WithWranglerArgs } from "./utils.js";
+import { normalizePath } from "../utils/normalize-path.js";
+import { getEnvFromPlatformProxy, quoteShellMeta, type WorkerEnvVar } from "./utils/helpers.js";
+import type { WranglerTarget } from "./utils/run-wrangler.js";
+import { runWrangler } from "./utils/run-wrangler.js";
+import type { WithWranglerArgs } from "./utils/utils.js";
 import {
 	getNormalizedOptions,
 	printHeaders,
@@ -48,7 +48,7 @@ import {
 	retrieveCompiledConfig,
 	withWranglerOptions,
 	withWranglerPassthroughArgs,
-} from "./utils.js";
+} from "./utils/utils.js";
 
 /**
  * Implementation of the `opennextjs-cloudflare populateCache` command.
@@ -247,7 +247,7 @@ async function populateR2IncrementalCache(
 	const concurrency = Math.max(1, populateCacheOptions.cacheChunkSize ?? 50);
 	const jurisdiction = binding.jurisdiction ? `--jurisdiction ${binding.jurisdiction}` : "";
 
-	runWrangler(
+	const result = runWrangler(
 		buildOpts,
 		[
 			"r2 bulk put",
@@ -267,6 +267,11 @@ async function populateR2IncrementalCache(
 	);
 
 	fs.rmSync(listFile, { force: true });
+
+	if (!result.success) {
+		logger.error(`Wrangler r2 bulk put command failed${result.stderr ? `:\n${result.stderr}` : ""}`);
+		process.exit(1);
+	}
 
 	logger.info(`Successfully populated cache with ${assets.length} assets`);
 }
@@ -313,7 +318,7 @@ async function populateKVIncrementalCache(
 
 		fs.writeFileSync(chunkPath, JSON.stringify(kvMapping));
 
-		runWrangler(
+		const result = runWrangler(
 			buildOpts,
 			[
 				"kv bulk put",
@@ -330,6 +335,11 @@ async function populateKVIncrementalCache(
 		);
 
 		fs.rmSync(chunkPath, { force: true });
+
+		if (!result.success) {
+			logger.error(`Wrangler kv bulk put command failed${result.stderr ? `:\n${result.stderr}` : ""}`);
+			process.exit(1);
+		}
 	}
 
 	logger.info(`Successfully populated cache with ${assets.length} assets`);
@@ -349,7 +359,7 @@ function populateD1TagCache(
 		throw new Error(`No D1 binding ${JSON.stringify(D1_TAG_BINDING_NAME)} found!`);
 	}
 
-	runWrangler(
+	const result = runWrangler(
 		buildOpts,
 		[
 			"d1 execute",
@@ -364,6 +374,11 @@ function populateD1TagCache(
 			logging: "error",
 		}
 	);
+
+	if (!result.success) {
+		logger.error(`Wrangler d1 execute command failed${result.stderr ? `:\n${result.stderr}` : ""}`);
+		process.exit(1);
+	}
 
 	logger.info("\nSuccessfully created D1 table");
 }
