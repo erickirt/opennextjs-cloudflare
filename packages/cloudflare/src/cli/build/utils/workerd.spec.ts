@@ -59,10 +59,6 @@ describe("transformBuildCondition", () => {
 		expect(defaultExport.transformedExports).toEqual({
 			".": "/path/to/index.js",
 			"./server": {
-				"react-server": {
-					workerd: "./server.edge.js",
-					other: "./server.js",
-				},
 				default: "./server.js",
 			},
 		});
@@ -80,7 +76,7 @@ describe("transformBuildCondition", () => {
 		});
 	});
 
-	test("only consider leaves", () => {
+	test("object-valued condition", () => {
 		const exports = {
 			".": "/path/to/index.js",
 			"./server": {
@@ -92,7 +88,7 @@ describe("transformBuildCondition", () => {
 
 		const workerd = transformBuildCondition(exports, "workerd");
 
-		expect(workerd.hasBuildCondition).toBe(false);
+		expect(workerd.hasBuildCondition).toBe(true);
 		expect(workerd.transformedExports).toEqual({
 			".": "/path/to/index.js",
 			"./server": {
@@ -100,6 +96,25 @@ describe("transformBuildCondition", () => {
 					default: "./server.edge.js",
 				},
 			},
+		});
+	});
+
+	test("preserve sibling subtree that nests the condition", () => {
+		const exports = {
+			"react-server": {
+				workerd: "./rsc.edge.js",
+			},
+			workerd: "./top.edge.js",
+		};
+
+		const workerd = transformBuildCondition(exports, "workerd");
+
+		expect(workerd.hasBuildCondition).toBe(true);
+		expect(workerd.transformedExports).toEqual({
+			"react-server": {
+				workerd: "./rsc.edge.js",
+			},
+			workerd: "./top.edge.js",
 		});
 	});
 });
@@ -171,6 +186,38 @@ describe("transformPackageJson", () => {
 			name: "test",
 			imports: {
 				workerd: "./server.edge.js",
+			},
+		});
+		expect(hasBuildCondition).toBe(true);
+	});
+
+	// https://github.com/opennextjs/opennextjs-cloudflare/issues/1153
+	// Matches the exports field of pg-cloudflare@1.3.0.
+	test("exports with object-valued workerd condition (pg-cloudflare)", () => {
+		const json = {
+			name: "pg-cloudflare",
+			exports: {
+				".": {
+					workerd: {
+						import: "./esm/index.mjs",
+						require: "./dist/index.js",
+					},
+					default: "./dist/empty.js",
+				},
+				"./package.json": "./package.json",
+			},
+		};
+		const { transformed, hasBuildCondition } = transformPackageJson(json);
+		expect(transformed).toEqual({
+			name: "pg-cloudflare",
+			exports: {
+				".": {
+					workerd: {
+						import: "./esm/index.mjs",
+						require: "./dist/index.js",
+					},
+				},
+				"./package.json": "./package.json",
 			},
 		});
 		expect(hasBuildCondition).toBe(true);
