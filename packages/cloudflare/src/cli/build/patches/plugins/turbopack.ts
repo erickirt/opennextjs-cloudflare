@@ -14,6 +14,46 @@ fix:
 `;
 
 /**
+ * Replace Turbopack's `loadWebAssemblyModule` with a call to our generated `loadWasmChunk`.
+ *
+ * The original implementation uses `WebAssembly.compileStreaming`, which is not available
+ * in workerd. `loadWasmChunk` resolves the chunk via a static `import()` switch so the
+ * bundler can statically discover and bundle each `.wasm` chunk.
+ */
+export const replaceLoadWebAssemblyModuleRule = `
+rule:
+  kind: function_declaration
+  has:
+    field: name
+    regex: "^loadWebAssemblyModule$"
+fix: |-
+  function loadWebAssemblyModule(chunkPath, _edgeModule) {
+    return loadWasmChunk(chunkPath);
+  }
+`;
+
+/**
+ * Replace Turbopack's `loadWebAssembly` with a synchronous-instantiation variant.
+ *
+ * The original implementation uses `WebAssembly.instantiateStreaming`, which is not
+ * available in workerd. We load the compiled module via `loadWasmChunk` and then call
+ * the synchronous `WebAssembly.instantiate` to produce the instance's exports.
+ */
+export const replaceLoadWebAssemblyRule = `
+rule:
+  kind: function_declaration
+  has:
+    field: name
+    regex: "^loadWebAssembly$"
+fix: |-
+  async function loadWebAssembly(chunkPath, _edgeModule, imports) {
+    const mod = await loadWasmChunk(chunkPath);
+    const { exports } = await WebAssembly.instantiate(mod, imports);
+    return exports;
+  }
+`;
+
+/**
  * Discover Turbopack external module mappings by reading symlinks in .next/node_modules/.
  *
  * Turbopack externalizes packages listed in serverExternalPackages and creates hashed
@@ -225,8 +265,11 @@ export const patchTurbopackRuntime: CodePatcher = {
 				const externalImportRule = buildExternalImportRule(mappings, tracedFiles, code);
 				let patched = patchCode(code, externalImportRule);
 				patched = patchCode(patched, inlineChunksRule);
+				patched = patchCode(patched, replaceLoadWebAssemblyModuleRule);
+				patched = patchCode(patched, replaceLoadWebAssemblyRule);
 
-				return `${patched}\n${inlineChunksFn(tracedFiles)}`;
+				return `${patched}
+${inlineChunksFn(tracedFiles)}\n${loadWasmChunkFn(tracedFiles)}`;
 			},
 		},
 	],
@@ -262,6 +305,31 @@ ${chunks
 	.join("\n")}
       default:
         throw new Error(\`Not found \${chunkPath}\`);
+    }
+  }
+`;
+}
+
+/**
+ * Generate a `loadWasmChunk` function that maps a `.next`-relative chunk path to a
+ * statically-importable `.wasm` module.
+ *
+ * The replacement rules for Turbopack's `loadWebAssembly{,Module}` delegate to this
+ * function. Because the imports are emitted as string literals, the bundler can
+ * statically discover every wasm chunk and include them in the final build.
+ */
+export function loadWasmChunkFn(tracedFiles: string[]) {
+	const wasmFiles = tracedFiles.filter((f) => f.endsWith(".wasm"));
+	const cases = wasmFiles
+		.map((absPath) => ({ absPath, relPath: absPath.replace(/.*\/\.next\//, "") }))
+		.map(({ absPath, relPath }) => `      case "${relPath}": return (await import("${absPath}")).default;`)
+		.join("\n");
+	return `
+  async function loadWasmChunk(chunkPath) {
+    switch (chunkPath) {
+${cases}
+      default:
+        throw new Error(\`Unknown wasm chunk: \${chunkPath}\`);
     }
   }
 `;
